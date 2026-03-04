@@ -4,7 +4,7 @@ import {
   AlertCircle, RefreshCw, Info, Check, X, Landmark, ShieldAlert, Hash, ChevronDown, Phone, FileSignature, Globe, Save, FolderOpen, CheckCheck, XOctagon, Archive, Key, Zap, Banknote, FileJson, FileOutput, FileUp, Edit3, Briefcase, Tag, TrendingUp, Settings2, Paperclip, Link, Layers, MousePointer2, Activity, Fingerprint, Database, ClipboardCheck, AlertTriangle, Search, Clock, ListOrdered, Table, Maximize2, Minimize2, Box, FilePlus, QrCode
 } from 'lucide-react';
 import { FileStatus, RenamedFile, ManagedPoint, ReferenceNumber } from './types';
-import { fileToBase64, preprocessEmailText, readPartialText, extractEmlContent, rtfToText, msgToText } from './services/fileUtils';
+import { fileToBase64, preprocessEmailText, readPartialText, extractEmlContent, extractLegacyDocument, msgToText } from './services/fileUtils';
 import { extractPdfText } from './services/pdfUtils';
 import { processFile, FileAnalysisResult } from './services/geminiService';
 import JSZip from 'jszip';
@@ -202,10 +202,10 @@ const App: React.FC = () => {
           subParts.push({ text: `DOCUMENT (Email): ${name}\nBODY: ${text}` });
           attachments.forEach(a => subParts.push({ inlineData: { data: a.data, mimeType: a.mimeType } }));
         } 
-        else if (lowName.endsWith('.rtf')) {
-          const rtfRaw = await readPartialText(f.originalFile);
-          const rtfClean = rtfToText(rtfRaw);
-          subParts.push({ text: `DOCUMENT (RTF Pre-processed): ${name}\nCONTENT: ${rtfClean}` });
+        else if (lowName.endsWith('.rtf') || lowName.endsWith('.doc') || lowName.endsWith('.docx')) {
+          // SCRAPE BINARY FIX: Safely extracts text and deletes JSON-breaking control characters 
+          const cleanDocText = await extractLegacyDocument(f.originalFile);
+          subParts.push({ text: `DOCUMENT (Word/RTF): ${name}\nCONTENT: ${cleanDocText}` });
         }
         else if (lowName.endsWith('.msg')) {
           const msgText = await msgToText(f.originalFile);
