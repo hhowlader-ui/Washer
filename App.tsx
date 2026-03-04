@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { FileStatus, RenamedFile, ManagedPoint, ReferenceNumber } from './types';
 import { fileToBase64, preprocessEmailText, readPartialText, extractEmlContent, rtfToText, msgToText } from './services/fileUtils';
+import { extractPdfText } from './services/pdfUtils';
 import { processFile, FileAnalysisResult } from './services/geminiService';
 import JSZip from 'jszip';
 
@@ -210,15 +211,31 @@ const App: React.FC = () => {
           const msgText = await msgToText(f.originalFile);
           subParts.push({ text: `DOCUMENT (Outlook MSG Pre-processed Strings): ${name}\nEXTRACTED DATA: ${msgText}` });
         }
-        else if (f.originalFile.type === 'application/pdf' || lowName.endsWith('.pdf') || f.originalFile.type.startsWith('image/')) {
-          subParts.push({ text: `DOCUMENT (Binary): ${name}` });
-          // SPEED FIX: Prevent massive files from freezing the UI/API. Cap binary payload to first 4MB.
-          const maxBinarySize = 4 * 1024 * 1024; // 4MB
+        else if (f.originalFile.type === 'application/pdf' || lowName.endsWith('.pdf')) {
+          // PDF LOGIC: Try to extract pure text first to save tokens and speed up the API
+          const pdfText = await extractPdfText(f.originalFile);
+          
+          if (pdfText.length > 100) {
+            // Success: It's a text-based PDF
+            subParts.push({ text: `DOCUMENT (PDF Text): ${name}\nCONTENT: ${pdfText}` });
+          } else {
+            // Fallback: It's a scanned PDF. Send as an image so Vision model can read it.
+            subParts.push({ text: `DOCUMENT (Scanned PDF): ${name}` });
+            const maxBinarySize = 4 * 1024 * 1024; // 4MB
+            const fileToEncode = f.originalFile.size > maxBinarySize 
+              ? new File([f.originalFile.slice(0, maxBinarySize)], f.originalFile.name, { type: f.originalFile.type })
+              : f.originalFile;
+            subParts.push({ inlineData: { data: await fileToBase64(fileToEncode), mimeType: 'application/pdf' } });
+          }
+        }
+        else if (f.originalFile.type.startsWith('image/')) {
+          // IMAGES LOGIC
+          subParts.push({ text: `DOCUMENT (Image): ${name}` });
+          const maxBinarySize = 4 * 1024 * 1024; // 4MB cap
           const fileToEncode = f.originalFile.size > maxBinarySize 
             ? new File([f.originalFile.slice(0, maxBinarySize)], f.originalFile.name, { type: f.originalFile.type })
             : f.originalFile;
-            
-          subParts.push({ inlineData: { data: await fileToBase64(fileToEncode), mimeType: f.originalFile.type || 'application/pdf' } });
+          subParts.push({ inlineData: { data: await fileToBase64(fileToEncode), mimeType: f.originalFile.type } });
         } else {
           subParts.push({ text: `DOCUMENT (Text): ${name}\nCONTENT: ${await readPartialText(f.originalFile)}` });
         }
