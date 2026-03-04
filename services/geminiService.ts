@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { FILING_RULES } from "../constants";
 
@@ -10,6 +9,9 @@ export interface FileAnalysisResult {
   referenceNumbers: { type: string; value: string; context?: string }[];
 }
 
+// 🚀 Instantiate the client ONCE globally, outside the function
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
 export async function processFile(
   content: string | { data: string, mimeType: string } | { parts: any[] },
   originalFilename: string,
@@ -18,10 +20,11 @@ export async function processFile(
   isBundle: boolean = false,
   linkCode?: string
 ): Promise<FileAnalysisResult | { bundleResults: FileAnalysisResult[] }> {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  
   const ext = originalFilename.split('.').pop()?.toLowerCase() || '';
   const isAnalyzeOnly = mode === 'ANALYZE_ONLY';
   
+  // Use Gemini 3 Pro for complex email parsing (.eml, .msg) to ensure header accuracy
   // Use Gemini 3 Pro for complex email parsing (.eml, .msg) to ensure header accuracy
   // Use Gemini 3 Flash for standard documents (pdf, docx, etc.) for speed and efficiency
   const isEmail = ext === 'eml' || ext === 'msg';
@@ -38,35 +41,39 @@ export async function processFile(
       finalParts.push({ inlineData: { data: content.data, mimeType: content.mimeType } });
     }
 
-    // Determine instructions based on whether it's a linked bundle or a high-speed independent batch
-    const linkInstruction = linkCode 
-      ? `A shared link code [${linkCode}] MUST be inserted immediately after the protocol category code in the 'newName' for EVERY file. Example: [ZA][${linkCode}] or [KA][${linkCode}].`
-      : `Process files independently. NO shared link code required.`;
+// Determine instructions based on whether it's a linked bundle or a high-speed independent batch
+    const linkInstruction = linkCode 
+      ? `A shared link code [${linkCode}] MUST be inserted immediately after the protocol category code in the 'newName' for EVERY file. Example: [ZA][${linkCode}] or [KA][${linkCode}].`
+      : `Process files independently. NO shared link code required.`;
 
-    const instructions = isBundle 
-      ? `THESE ARE MULTIPLE FILES IN A BATCH.
-         ${linkInstruction}
-         
-         DATE EXTRACTION PRIORITY:
-         1. Extract the specific date from the content of the document itself (in ddmmyyyy format).
-         2. If linked as a bundle and document is an attachment with no internal date, use the date of the primary email.
-         3. Fallback: ${fallbackDate}.
-         
-         Return an object with 'bundleResults', ONE FOR EACH unique file provided in the input parts.
-         
-         CRITICAL REQUIREMENTS:
-         1. 'newName' and 'summary' MUST be distinct and highly specific to the individual file.
-         2. Attachments MUST NOT just copy the email name; use their OWN content category.
-         3. For emails in a linked bundle, 'newName' MUST include "incl att".`
-      : `Apply protocol v4.8 strictly. 
-         DATE EXTRACTION PRIORITY: 1. Internal content 2. Fallback: ${fallbackDate}.
-         Ensure ddmmyyyy is at the end. Return JSON only.`;
+    let instructions = "";
+    
+    if (isBundle) {
+        instructions = `THESE ARE MULTIPLE FILES IN A BATCH.
+         ${linkInstruction}
+         
+         DATE EXTRACTION PRIORITY:
+         1. Extract the specific date from the content of the document itself (in ddmmyyyy format).
+         2. If linked as a bundle and document is an attachment with no internal date, use the date of the primary email.
+         3. Fallback: ${fallbackDate}.
+         
+         Return an object with 'bundleResults', ONE FOR EACH unique file provided in the input parts.
+         
+         CRITICAL REQUIREMENTS:
+         1. 'newName' and 'summary' MUST be distinct and highly specific to the individual file.
+         2. Attachments MUST NOT just copy the email name; use their OWN content category.
+         3. For emails in a linked bundle, 'newName' MUST include "incl att".`;
+    } else {
+        instructions = `Apply protocol v4.8 strictly. 
+         DATE EXTRACTION PRIORITY: 1. Internal content 2. Fallback: ${fallbackDate}.
+         Ensure ddmmyyyy is at the end. Return JSON only.`;
+    }
 
-    const mainPromptPart = { 
-      text: `TASK: ${isBundle ? 'BATCH PROCESSING' : 'INDIVIDUAL PROCESSING'}
+    const mainPromptPart = { 
+      text: `TASK: ${isBundle ? 'BATCH PROCESSING' : 'INDIVIDUAL PROCESSING'}
 ${instructions}
 Return JSON strictly matching the schema.`
-    };
+    };
     
     finalParts.unshift(mainPromptPart);
 

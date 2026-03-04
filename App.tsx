@@ -61,8 +61,9 @@ const App: React.FC = () => {
     localStorage.setItem('hw_budget_limit', num.toString());
   };
 
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
+useEffect(() => {
+    // Changed from 1000 to 10000 to prevent massive re-renders
+    const timer = setInterval(() => setNow(Date.now()), 10000);
     return () => clearInterval(timer);
   }, []);
 
@@ -371,22 +372,26 @@ const App: React.FC = () => {
     return [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
   }, [files]);
 
-  const downloadReport = useCallback(() => {
+ const downloadReport = useCallback(() => {
     if (files.length === 0) return;
     const blob = new Blob(['\ufeff', getReportContent()], { type: 'application/msword' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
+    link.href = url;
     link.download = `HW_Report_${caseCode || 'UNASSIGNED'}_${getFormattedTimestamp()}.doc`;
     link.click();
+    URL.revokeObjectURL(url); // Cleans up memory
   }, [files, caseCode, getReportContent, getFormattedTimestamp]);
 
   const downloadCsv = useCallback(() => {
     if (files.length === 0) return;
     const blob = new Blob([getMappingCsvContent()], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
+    link.href = url;
     link.download = `HW_Mapping_${caseCode || 'UNASSIGNED'}_${getFormattedTimestamp()}.csv`;
     link.click();
+    URL.revokeObjectURL(url); // Cleans up memory
   }, [files, caseCode, getMappingCsvContent, getFormattedTimestamp]);
 
   const downloadJson = useCallback(() => {
@@ -397,10 +402,12 @@ const App: React.FC = () => {
       files: files.map(({ originalFile, ...rest }) => rest)
     };
     const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
+    link.href = url;
     link.download = `HW_Intelligence_${caseCode || 'UNASSIGNED'}_${getFormattedTimestamp()}.json`;
     link.click();
+    URL.revokeObjectURL(url); // Cleans up memory
   }, [files, caseCode, getFormattedTimestamp]);
 
   const downloadMasterPackage = useCallback(async () => {
@@ -408,6 +415,7 @@ const App: React.FC = () => {
     if (completed.length === 0) return;
     const zip = new JSZip();
     const timestamp = getFormattedTimestamp();
+   
     const safeCaseCode = caseCode || 'UNASSIGNED';
 
     completed.forEach(f => { if (f.originalFile) zip.file(`Documents/${f.newName}`, f.originalFile); });
@@ -423,12 +431,14 @@ const App: React.FC = () => {
     };
     zip.file(`Intelligence/HW_Intelligence_${safeCaseCode}_${timestamp}.json`, JSON.stringify(exportData, null, 2));
     
-    const content = await zip.generateAsync({ type: "blob" });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(content);
-    link.download = `HW_Master_Package_${safeCaseCode}_${timestamp}.zip`;
-    link.click();
-  }, [files, caseCode, getMappingCsvContent, getReportContent, getFormattedTimestamp]);
+const content = await zip.generateAsync({ type: "blob" });
+    const url = URL.createObjectURL(content);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `HW_Master_Package_${safeCaseCode}_${timestamp}.zip`;
+    link.click();
+    URL.revokeObjectURL(url); // Cleans up the ZIP memory
+  }, [files, caseCode, getMappingCsvContent, getReportContent, getFormattedTimestamp]);
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-800 antialiased overflow-x-hidden">

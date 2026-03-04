@@ -1,4 +1,3 @@
-
 export async function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -17,12 +16,21 @@ export async function fileToBase64(file: File): Promise<string> {
  * Fast partial read for large text/email files.
  */
 export async function readPartialText(file: File): Promise<string> {
-  const slice = file.slice(0, 1024 * 512); // Increased to 512KB for better email parsing
+  const slice = file.slice(0, 1024 * 512); // 512KB limit
   return await slice.text();
 }
 
+/**
+ * 🚀 TOKEN OPTIMIZATION: Strips base64 blocks and hex dumps from raw text
+ */
 export function preprocessEmailText(text: string): string {
-  return text.replace(/[A-Za-z0-9+/]{100,}/g, '[DATA]');
+  // Remove massive blocks of base64 (usually images/attachments hidden in text)
+  let clean = text.replace(/([A-Za-z0-9+/]{80,}\r?\n)+[A-Za-z0-9+/]*={0,2}/g, '[BASE64_ATTACHMENT_REMOVED]');
+  // Remove massive blocks of hex (often found in RTF/MSG)
+  clean = clean.replace(/([0-9A-Fa-f]{80,}\r?\n)+[0-9A-Fa-f]*/g, '[HEX_DATA_REMOVED]');
+  // Remove long strings of repeating characters (e.g., -------- or =======)
+  clean = clean.replace(/([=\-_*~]){20,}/g, '$1$1$1[DIVIDER]$1$1$1');
+  return clean;
 }
 
 /**
@@ -32,52 +40,37 @@ export function rtfToText(rtf: string): string {
   if (!rtf || typeof rtf !== 'string') return "";
   
   // Basic stripping of RTF control words and groups
-  // This extracts the printable text content from the RTF structure
-  let text = rtf.replace(/\\([a-z]{1,32})(-?\d+)? ?|\\'([0-9a-f]{2})|\\\{|\\\}|\r\n|[\{\}]/gi, (match, word, arg, hex) => {
+  let text = rtf.replace(/\\[a-z]{1,32}(-?\d+)? ?|\\'([0-9a-f]{2})|\\{/gi, (match, arg, hex) => {
     if (hex) return String.fromCharCode(parseInt(hex, 16));
     return "";
   });
   
-  // Clean up multiple spaces and newlines
-  return text.replace(/\s+/g, ' ').trim();
+  // Clean up structural braces and massive whitespace
+  text = text.replace(/[{}]/g, '');
+  text = preprocessEmailText(text); // Strip hidden hex/base64
+  return text.replace(/\s+/g, ' ').trim().substring(0, 15000); // Hard limit to prevent token blowouts
 }
 
 /**
  * Improved string extraction for .msg files (Outlook Structured Storage).
- * Scans for printable strings in both UTF-16LE and UTF-8/ASCII encodings.
  */
 export async function msgToText(file: File): Promise<string> {
-  const buffer = await file.slice(0, 1024 * 1024).arrayBuffer(); // Read up to 1MB for larger bodies
-  const view = new Uint8Array(buffer);
-  
+  const buffer = await file.slice(0, 1024 * 512).arrayBuffer(); // Read up to 512kb (prevent memory crash)
   const decoderUTF16 = new TextDecoder('utf-16le', { fatal: false });
   const decoderUTF8 = new TextDecoder('utf-8', { fatal: false });
   
-  let utf16Str = "";
-  try {
-    utf16Str = decoderUTF16.decode(buffer);
-  } catch (e) {}
+  const utf16Str = decoderUTF16.decode(buffer);
+  const utf8Str = decoderUTF8.decode(buffer);
 
-  let utf8Str = "";
-  try {
-    utf8Str = decoderUTF8.decode(buffer);
-  } catch (e) {}
-
-  /**
-   * Filter and extract meaningful printable blocks.
-   * Outlook stores properties in dedicated streams; we look for the contiguous printable text.
-   */
+  // 🚀 TOKEN OPTIMIZATION: Extract only strings that look like actual sentences/data
   const extractValidStrings = (raw: string) => {
-    // Regex for sequences of printable characters including common international characters
-    const matches = raw.match(/[\x20-\x7E\u00A0-\u00FF\u0100-\u017F]{5,}/g);
+    // Look for strings that have at least one space and alphanumeric chars (filters out binary junk)
+    const matches = raw.match(/[A-Za-z0-9 \.,!?'"@£$%&\(\)\-:\n\r]{15,}/g);
     if (!matches) return [];
     
     return matches.filter(s => {
-      // Exclude strings that are purely noise symbols
-      if (/^[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/? ]+$/.test(s)) return false;
-      // Exclude common binary padding patterns
-      if (/^(.)\1+$/.test(s) && s.length < 20) return false;
-      return true;
+      const spaceCount = (s.match(/ /g) || []).length;
+      return spaceCount > 2; // Real sentences have spaces. Binary junk usually doesn't.
     });
   };
 
@@ -86,20 +79,19 @@ export async function msgToText(file: File): Promise<string> {
     ...extractValidStrings(utf8Str)
   ];
   
-  // Remove duplicates and prioritize longer segments which are likely body content
-  const uniqueStrings = Array.from(new Set(allStrings)).sort((a, b) => b.length - a.length);
+  const uniqueStrings = Array.from(new Set(allStrings));
   
-  // Combine results with a slight preference for structural markers
-  return uniqueStrings.slice(0, 100).join("\n").substring(0, 20000); 
+  // Join the most sentence-like blocks.
+  const joinedText = uniqueStrings.join("\n\n");
+  
+  return preprocessEmailText(joinedText).substring(0, 15000); 
 }
 
 /**
- * Simple MIME parser for .eml files to extract body and binary attachments.
- * IMPORTANT: Preserves headers to ensure AI can read metadata like 'To' and 'From'.
+ * 🚀 TOKEN OPTIMIZATION: Advanced MIME parser that strips HTML and ignores binary chunks
  */
 export async function extractEmlContent(rawText: string): Promise<{ text: string, attachments: { data: string, mimeType: string }[] }> {
-  // Extract critical headers using regex for high precision extraction before body parsing
-  // This helps separate metadata from content to prevent "Subject as Recipient" errors
+  // Extract critical headers 
   const fromMatch = rawText.match(/^From:\s*(.+)$/im);
   const toMatch = rawText.match(/^To:\s*(.+)$/im);
   const subjectMatch = rawText.match(/^Subject:\s*(.+)$/im);
@@ -107,10 +99,6 @@ export async function extractEmlContent(rawText: string): Promise<{ text: string
 
   const boundaryMatch = rawText.match(/boundary=(?:"?)([^";\n\r]+)(?:"?)/i);
   
-  // Extract raw headers block (approx first 2k chars) as backup
-  const headerEndIndex = rawText.indexOf('\n\n');
-  const headers = headerEndIndex !== -1 ? rawText.substring(0, headerEndIndex) : rawText.substring(0, 2000);
-
   let emailBody = "";
   const attachments: { data: string, mimeType: string }[] = [];
 
@@ -118,52 +106,65 @@ export async function extractEmlContent(rawText: string): Promise<{ text: string
     const boundary = boundaryMatch[1];
     const parts = rawText.split(`--${boundary}`);
     
+    // Track if we found plain text (so we can ignore HTML if possible)
+    let foundPlainText = false;
+
     for (const part of parts) {
       if (part.trim() === "" || part.trim() === "--") continue;
 
       const contentTypeMatch = part.match(/Content-Type:\s*([^;\n\r]+)/i);
       const mimeType = contentTypeMatch ? contentTypeMatch[1].trim().toLowerCase() : "";
+      
+      const isHtml = mimeType.includes("text/html");
+      const isPlain = mimeType.includes("text/plain");
 
-      // Extract Text Body
-      if (mimeType.includes("text/plain") || (mimeType.includes("text/html") && !emailBody)) {
-        const body = part.split(/\r?\n\r?\n/).slice(1).join("\n\n").replace(/--$/, "").trim();
-        // Basic Quoted-Printable decoding for common chars
-        emailBody += body.replace(/=([A-F0-9]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16))).replace(/=\r?\n/g, "");
+      if (isPlain) {
+        foundPlainText = true;
+        let body = part.split(/\r?\n\r?\n/).slice(1).join("\n\n").replace(/--$/, "").trim();
+        emailBody += body.replace(/=([A-F0-9]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16))).replace(/=\r?\n/g, "") + "\n\n";
       } 
-      // Extract Binary Attachments (PDF/Images)
+      else if (isHtml && !foundPlainText) {
+        // Only use HTML if we didn't find a plain text alternative
+        let body = part.split(/\r?\n\r?\n/).slice(1).join("\n\n").replace(/--$/, "").trim();
+        body = body.replace(/=([A-F0-9]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16))).replace(/=\r?\n/g, "");
+        // Strip HTML tags to save tokens
+        body = body.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ''); // Remove CSS
+        body = body.replace(/<[^>]+>/g, ' '); // Strip all other tags
+        emailBody += body + "\n\n";
+      }
       else if (mimeType.includes("application/pdf") || mimeType.includes("image/")) {
         const sections = part.split(/\r?\n\r?\n/);
         if (sections.length > 1) {
           const base64Data = sections.slice(1).join("").replace(/[\r\n\s]/g, "").replace(/--$/, "");
-          if (base64Data.length > 100) { // Avoid small junk
+          if (base64Data.length > 100) { 
              attachments.push({ data: base64Data, mimeType });
           }
         }
       }
     }
   } else {
-      // Fallback if no boundary - assume entire text is body if not just headers
-      emailBody = rawText.substring(headers.length).trim();
+      // Fallback if no boundary
+      const headerEndIndex = rawText.indexOf('\n\n');
+      emailBody = headerEndIndex !== -1 ? rawText.substring(headerEndIndex) : rawText;
   }
 
-  // Construct a payload that explicitly separates headers for the AI
-  const fullText = `[CRITICAL_METADATA_EXTRACTED_BY_SYSTEM]
-FROM_HEADER: ${fromMatch ? fromMatch[1].trim() : "Not Found"}
-TO_HEADER: ${toMatch ? toMatch[1].trim() : "Not Found"}
-SUBJECT_HEADER: ${subjectMatch ? subjectMatch[1].trim() : "Not Found"}
-DATE_HEADER: ${dateMatch ? dateMatch[1].trim() : "Not Found"}
-[/CRITICAL_METADATA_EXTRACTED_BY_SYSTEM]
+  // Clean the final email body of any leaked base64 or massive spacing
+  emailBody = preprocessEmailText(emailBody).replace(/\s+/g, ' ').trim();
 
-[RAW_HEADERS]
-${headers}
-[/RAW_HEADERS]
+  // Construct a much lighter payload
+  const fullText = `[METADATA]
+FROM: ${fromMatch ? fromMatch[1].trim() : "Not Found"}
+TO: ${toMatch ? toMatch[1].trim() : "Not Found"}
+SUBJECT: ${subjectMatch ? subjectMatch[1].trim() : "Not Found"}
+DATE: ${dateMatch ? dateMatch[1].trim() : "Not Found"}
+[/METADATA]
 
-[EMAIL_BODY]
-${emailBody || "No text body found."}
-[/EMAIL_BODY]`;
+[BODY]
+${emailBody.substring(0, 15000) || "No text body found."}
+[/BODY]`;
 
   return { 
     text: fullText, 
-    attachments: attachments.slice(0, 3) // Limit to top 3 attachments to preserve tokens
+    attachments: attachments.slice(0, 2) // Limit to top 2 attachments
   };
 }
