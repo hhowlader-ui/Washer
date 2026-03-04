@@ -1,0 +1,5 @@
+{
+  "name": "Washer 1",
+  "description": "An AI-powered bulk file renamer that automatically analyzes document contents and renames them according to strict organizational filing conventions.",
+  "requestFramePermissions": []
+}
