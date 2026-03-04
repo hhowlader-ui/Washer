@@ -91,11 +91,11 @@ export async function msgToText(file: File): Promise<string> {
  * 🚀 TOKEN OPTIMIZATION: Advanced MIME parser that strips HTML and ignores binary chunks
  */
 export async function extractEmlContent(rawText: string): Promise<{ text: string, attachments: { data: string, mimeType: string }[] }> {
-  // Extract critical headers 
-  const fromMatch = rawText.match(/^From:\s*(.+)$/im);
-  const toMatch = rawText.match(/^To:\s*(.+)$/im);
-  const subjectMatch = rawText.match(/^Subject:\s*(.+)$/im);
-  const dateMatch = rawText.match(/^Date:\s*(.+)$/im);
+  // Extract critical headers (ACCURACY FIX: multiline regex support)
+  const fromMatch = rawText.match(/^From:\s*([\s\S]*?)(?=\n[A-Z][a-z0-9\-]+:|\n\n)/im);
+  const toMatch = rawText.match(/^To:\s*([\s\S]*?)(?=\n[A-Z][a-z0-9\-]+:|\n\n)/im);
+  const subjectMatch = rawText.match(/^Subject:\s*([\s\S]*?)(?=\n[A-Z][a-z0-9\-]+:|\n\n)/im);
+  const dateMatch = rawText.match(/^Date:\s*([\s\S]*?)(?=\n[A-Z][a-z0-9\-]+:|\n\n)/im);
 
   const boundaryMatch = rawText.match(/boundary=(?:"?)([^";\n\r]+)(?:"?)/i);
   

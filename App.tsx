@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { 
   Upload, Download, Loader2, CheckCircle, Trash2, FileText, 
@@ -61,8 +60,8 @@ const App: React.FC = () => {
     localStorage.setItem('hw_budget_limit', num.toString());
   };
 
-useEffect(() => {
-    // Changed from 1000 to 10000 to prevent massive re-renders
+  useEffect(() => {
+    // Prevent massive re-renders
     const timer = setInterval(() => setNow(Date.now()), 10000);
     return () => clearInterval(timer);
   }, []);
@@ -213,7 +212,13 @@ useEffect(() => {
         }
         else if (f.originalFile.type === 'application/pdf' || lowName.endsWith('.pdf') || f.originalFile.type.startsWith('image/')) {
           subParts.push({ text: `DOCUMENT (Binary): ${name}` });
-          subParts.push({ inlineData: { data: await fileToBase64(f.originalFile), mimeType: f.originalFile.type || 'application/pdf' } });
+          // SPEED FIX: Prevent massive files from freezing the UI/API. Cap binary payload to first 4MB.
+          const maxBinarySize = 4 * 1024 * 1024; // 4MB
+          const fileToEncode = f.originalFile.size > maxBinarySize 
+            ? new File([f.originalFile.slice(0, maxBinarySize)], f.originalFile.name, { type: f.originalFile.type })
+            : f.originalFile;
+            
+          subParts.push({ inlineData: { data: await fileToBase64(fileToEncode), mimeType: f.originalFile.type || 'application/pdf' } });
         } else {
           subParts.push({ text: `DOCUMENT (Text): ${name}\nCONTENT: ${await readPartialText(f.originalFile)}` });
         }
@@ -267,7 +272,8 @@ useEffect(() => {
       nextBatch.forEach(f => processingTracker.current.add(f.id));
       processBatch(nextBatch);
     };
-    const timer = setInterval(processQueue, 100); 
+    // SPEED FIX: Changed polling from 100ms to 1000ms. Reduces CPU usage.
+    const timer = setInterval(processQueue, 1000); 
     return () => clearInterval(timer);
   }, [files, processBatch, isQuotaExceeded, batchSize]);
 
@@ -431,14 +437,14 @@ useEffect(() => {
     };
     zip.file(`Intelligence/HW_Intelligence_${safeCaseCode}_${timestamp}.json`, JSON.stringify(exportData, null, 2));
     
-const content = await zip.generateAsync({ type: "blob" });
-    const url = URL.createObjectURL(content);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `HW_Master_Package_${safeCaseCode}_${timestamp}.zip`;
-    link.click();
-    URL.revokeObjectURL(url); // Cleans up the ZIP memory
-  }, [files, caseCode, getMappingCsvContent, getReportContent, getFormattedTimestamp]);
+    const content = await zip.generateAsync({ type: "blob" });
+    const url = URL.createObjectURL(content);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `HW_Master_Package_${safeCaseCode}_${timestamp}.zip`;
+    link.click();
+    URL.revokeObjectURL(url); // Cleans up the ZIP memory
+  }, [files, caseCode, getMappingCsvContent, getReportContent, getFormattedTimestamp]);
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-800 antialiased overflow-x-hidden">
@@ -570,7 +576,7 @@ const content = await zip.generateAsync({ type: "blob" });
                 onDragOver={(e) => { e.preventDefault(); setIsDraggingRestore(true); }}
                 onDragLeave={() => setIsDraggingRestore(false)}
                 onDrop={(e) => { 
-                  e.preventDefault(); 
+                  e.preventDefault();
                   setIsDraggingRestore(false); 
                   const file = e.dataTransfer.files[0];
                   if (file && file.name.toLowerCase().endsWith('.json')) {
@@ -646,175 +652,4 @@ const content = await zip.generateAsync({ type: "blob" });
                                 </div>
                               ) : file.status === FileStatus.COMPLETED ? (
                                 <div className="space-y-4">
-                                  <div className="text-[10px] font-medium text-slate-900 break-all leading-tight bg-white p-4 rounded-2xl border-2 border-slate-100 shadow-sm hover:border-sky-300 transition-colors">{file.newName}</div>
-                                  <button 
-                                    onClick={() => downloadFile(file.originalFile, file.newName)} 
-                                    className="inline-flex items-center gap-2 text-[10px] font-medium text-sky-600 uppercase hover:text-sky-800 transition-all bg-sky-50 px-3 py-1.5 rounded-xl border border-sky-100 shadow-sm"
-                                  >
-                                    <Download className="w-3.5 h-3.5" /> DOWNLOAD FILE
-                                  </button>
-                                </div>
-                              ) : file.status === FileStatus.ERROR ? (
-                                <div className="bg-red-50 p-5 rounded-[1.5rem] border-2 border-red-100">
-                                  <div className="text-[10px] font-medium text-red-700 uppercase mb-2 tracking-widest flex items-center gap-2">
-                                    <AlertCircle className="w-4 h-4" /> ERROR BLOCKED
-                                  </div>
-                                  <button onClick={() => retryFile(file.id)} className="text-[10px] font-medium text-slate-600 uppercase flex items-center gap-2 hover:text-red-700 transition-colors">
-                                    <RefreshCw className="w-4 h-4" /> RE-QUEUED RETRY
-                                  </button>
-                                </div>
-                              ) : <span className="text-slate-300 text-[10px] font-medium uppercase tracking-[0.2em] px-4 py-2 bg-slate-50 rounded-xl border-2 border-dashed border-slate-100">WAITING IN PIPELINE</span>}
-                            </td>
-                            <td className="px-6 py-7 align-top">
-                              <p className="text-[13px] text-slate-700 mb-5 leading-relaxed font-medium bg-indigo-50/20 p-4 rounded-2xl border border-indigo-50/50 shadow-inner font-sans" title={file.summary}>{file.summary || "Pending strategic analysis."}</p>
-                              <div className="flex flex-wrap gap-2.5">
-                                {file.managedPoints?.map((p, idx) => (
-                                  <div key={idx} className={`px-4 py-2.5 rounded-2xl border-2 text-[11px] font-medium flex items-center gap-3 shadow-sm transition-all ${p.isHighRisk ? 'bg-red-50 border-red-200 text-red-800' : p.isAsset ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-white border-slate-100 text-slate-700'}`}>
-                                    {p.isHighRisk && <AlertTriangle className="w-4 h-4 text-red-600" />}
-                                    {p.isAsset && <Activity className="w-4 h-4 text-emerald-600" />}
-                                    <span className="truncate max-w-[280px]">{p.text}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            </td>
-                            <td className="px-6 py-7 align-top">
-                                {file.uniqueCode ? (
-                                    <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200 w-fit">
-                                        <QrCode className="w-3.5 h-3.5 text-slate-400" />
-                                        <span className="font-mono text-[11px] font-bold text-slate-600 tracking-wider">{file.uniqueCode}</span>
-                                    </div>
-                                ) : <span className="text-slate-300 text-[10px]">-</span>}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-            ))}
-            {stats.completed > 0 && (
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-12">
-                <section className="bg-white rounded-[3.5rem] p-12 shadow-2xl border-2 border-slate-100">
-                  <div className="flex items-center gap-6 mb-12">
-                    <div className="w-16 h-16 bg-sky-100 rounded-[2rem] flex items-center justify-center shadow-lg shadow-sky-100/50">
-                      <Fingerprint className="w-9 h-9 text-sky-600" />
-                    </div>
-                    <div>
-                      <h3 className="text-3xl font-black text-slate-900 tracking-tight leading-none">Intelligence Ledger</h3>
-                      <p className="text-[11px] text-slate-400 font-black uppercase tracking-[0.3em] mt-3">Aggregated Signal Identification</p>
-                    </div>
-                  </div>
-                  <div className="space-y-8 max-h-[700px] overflow-y-auto pr-6 custom-scrollbar">
-                    {Object.entries(intelligenceAggregates.references).length === 0 ? (
-                      <div className="bg-slate-50 p-10 rounded-[2.5rem] text-center border-2 border-dashed border-slate-200">
-                        <span className="text-sm font-black text-slate-400 uppercase tracking-widest">No signals detected yet</span>
-                      </div>
-                    ) : (
-                      Object.entries(intelligenceAggregates.references).map(([type, values]) => (
-                        <div key={type} className="bg-slate-50/50 rounded-[2.5rem] p-8 border-2 border-slate-100 group hover:border-sky-200 transition-all duration-300">
-                          <span className="text-xs font-black text-sky-600 uppercase tracking-[0.2em] block mb-5">{type}</span>
-                          <div className="flex flex-wrap gap-3">
-                            {Array.from(values as Set<string>).map(v => (
-                              <span key={v} className="bg-white px-5 py-2.5 rounded-2xl border-2 border-slate-100 text-[13px] font-black text-slate-800 shadow-sm hover:border-sky-400 transition-all cursor-default">{v}</span>
-                            ))}
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </section>
-                <section className="bg-white rounded-[3.5rem] p-12 shadow-2xl border-2 border-slate-100">
-                  <div className="flex items-center gap-6 mb-12">
-                    <div className="w-16 h-16 bg-red-50 rounded-[2rem] flex items-center justify-center shadow-lg shadow-red-100/50">
-                      <ShieldAlert className="w-9 h-9 text-red-600" />
-                    </div>
-                    <div>
-                      <h3 className="text-3xl font-black text-slate-900 tracking-tight leading-none">Risk & Asset Vectors</h3>
-                      <p className="text-[11px] text-slate-400 font-black uppercase tracking-[0.3em] mt-3">Priority Strategic Markers</p>
-                    </div>
-                  </div>
-                  <div className="space-y-6 max-h-[700px] overflow-y-auto pr-6 custom-scrollbar">
-                    {intelligenceAggregates.criticalPoints.length === 0 ? (
-                      <div className="bg-slate-50 p-10 rounded-[2.5rem] text-center border-2 border-dashed border-slate-200">
-                        <span className="text-sm font-black text-slate-400 uppercase tracking-widest">No priority markers identified</span>
-                      </div>
-                    ) : (
-                      intelligenceAggregates.criticalPoints.map((point, idx) => (
-                        <div key={idx} className={`p-7 rounded-[2.5rem] border-2 flex gap-6 transition-all duration-300 hover:translate-x-2 ${point.isHighRisk ? 'bg-red-50/30 border-red-100 hover:bg-red-50' : 'bg-emerald-50/30 border-emerald-100 hover:bg-emerald-50'}`}>
-                          <div className={`w-14 h-14 shrink-0 rounded-2xl flex items-center justify-center shadow-xl ${point.isHighRisk ? 'bg-red-600 text-white shadow-red-200' : 'bg-emerald-600 text-white shadow-emerald-200'}`}>
-                            {point.isHighRisk ? <AlertCircle className="w-7 h-7" /> : <Box className="w-7 h-7" />}
-                          </div>
-                          <div className="flex flex-col justify-center">
-                            <span className={`text-[11px] font-black uppercase tracking-widest mb-2 ${point.isHighRisk ? 'text-red-700' : 'text-emerald-700'}`}>
-                              {point.isHighRisk ? 'CRITICAL RISK SIGNAL' : 'IDENTIFIED STRATEGIC ASSET'}
-                            </span>
-                            <p className="text-[15px] font-black text-slate-900 leading-snug">{point.text}</p>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </section>
-              </div>
-            )}
-          </div>
-        )}
-      </main>
-
-      {selectedCount > 1 && (
-        <div className="fixed bottom-14 left-1/2 -translate-x-1/2 z-50">
-          <div className="bg-slate-900 text-white rounded-[2.5rem] px-10 py-6 shadow-[0_35px_60px_-15px_rgba(0,0,0,0.4)] flex items-center gap-12 border-b-8 border-sky-500 animate-in slide-in-from-bottom-10 duration-500">
-            <div className="flex items-center gap-6">
-              <div className="w-16 h-16 bg-sky-500 rounded-3xl flex items-center justify-center relative shadow-2xl shadow-sky-500/40">
-                <Layers className="w-8 h-8" />
-                <span className="absolute -top-3 -right-3 bg-white text-slate-900 text-sm font-black w-8 h-8 rounded-full flex items-center justify-center border-4 border-slate-900 shadow-xl">{selectedCount}</span>
-              </div>
-              <div className="flex flex-col">
-                <span className="text-lg font-black tracking-tight leading-none">Group Active</span>
-                <span className="text-[11px] text-sky-400 font-black uppercase tracking-[0.2em] mt-2">Multi-Document Protocol Bundle</span>
-              </div>
-            </div>
-            <button 
-              onClick={handleFastLink}
-              className="bg-white text-slate-900 px-10 py-4 rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-sky-50 transition-all flex items-center gap-3 shadow-xl active:scale-95"
-            >
-              <Zap className="w-5 h-5 text-sky-600" /> LINK SELECTED DATA
-            </button>
-            <button onClick={() => setFiles(prev => prev.map(f => ({ ...f, selected: false })))} className="text-slate-400 hover:text-white transition-colors">
-              <X className="w-8 h-8" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      <footer className="bg-white border-t-2 border-slate-200 px-10 py-6 flex items-center justify-between shadow-[0_-4px_20px_rgba(0,0,0,0.03)]">
-        <div className="flex gap-12 items-center">
-          <div className="flex items-center gap-3 text-sky-600">
-            <ShieldAlert className="w-5 h-5" />
-            <span className="text-xs font-black uppercase tracking-[0.2em]">PROTOCOL V4.8 SECURE</span>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="w-64 h-2.5 bg-slate-100 rounded-full overflow-hidden shadow-inner">
-              <div className="h-full bg-gradient-to-r from-sky-500 to-indigo-600 transition-all duration-700 ease-out" style={{ width: `${stats.progress}%` }} />
-            </div>
-            <span className="text-[11px] font-black text-slate-500 uppercase tracking-widest">{Math.round(stats.progress)}% COMPLETED</span>
-          </div>
-        </div>
-        <div className="flex items-center gap-8">
-          <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50 px-4 py-1.5 rounded-full border border-emerald-100">
-             <div className="w-2 h-2 bg-emerald-500 rounded-full animate-ping" />
-             <span className="text-[10px] font-black uppercase tracking-widest">Pipeline Operational</span>
-          </div>
-          <div className="text-[10px] font-black text-slate-400 uppercase tracking-[0.4em]">
-            HUDSON WEIR MASTER INTELLIGENCE PROTOCOL // TERMINAL v4.8.0X
-          </div>
-        </div>
-      </footer>
-      <input type="file" multiple className="hidden" ref={fileInputRef} onChange={(e) => handleFiles(e.target.files)} />
-      <input type="file" accept=".json" className="hidden" ref={jsonImportRef} onChange={handleImportJson} />
-    </div>
-  );
-};
-
-export default App;
+                                  <div className="text-[10px] font
