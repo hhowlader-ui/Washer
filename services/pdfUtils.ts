@@ -13,8 +13,12 @@ async function loadPdfJs(): Promise<any> {
     
     script.onload = () => {
       const pdfjsLib = (window as any).pdfjsLib;
-      // Set the worker source
-      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      
+      // 🚀 THE FIX: Disable the web worker entirely. 
+      // This stops the AI Studio browser from blocking cross-origin background scripts.
+      // It forces the PDF engine to run locally, ensuring it never crashes on extraction.
+      pdfjsLib.GlobalWorkerOptions.disableWorker = true;
+      
       pdfjsLoaded = true;
       resolve(pdfjsLib);
     };

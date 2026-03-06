@@ -9,7 +9,6 @@ export interface FileAnalysisResult {
   referenceNumbers: { type: string; value: string; context?: string }[];
 }
 
-// 🚀 Instantiate the client ONCE globally, outside the function
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 export async function processFile(
@@ -24,58 +23,33 @@ export async function processFile(
   const ext = originalFilename.split('.').pop()?.toLowerCase() || '';
   const isAnalyzeOnly = mode === 'ANALYZE_ONLY';
   
-  // Use Gemini 3 Pro for complex email parsing (.eml, .msg) to ensure header accuracy
-  // Use Gemini 3 Pro for complex email parsing (.eml, .msg) to ensure header accuracy
-  // Use Gemini 3 Flash for standard documents (pdf, docx, etc.) for speed and efficiency
-  const isEmail = ext === 'eml' || ext === 'msg';
-  const modelName = isEmail ? "gemini-3-pro-preview" : "gemini-3-flash-preview";
+  let finalParts: any[] = [];
+  if (typeof content === 'object' && 'parts' in content) {
+    finalParts = content.parts;
+  } else if (typeof content === 'string') {
+    finalParts.push({ text: content.substring(0, 30000) });
+  } else {
+    finalParts.push({ inlineData: { data: content.data, mimeType: content.mimeType } });
+  }
+
+  // 🚀 SMART ROUTING: If the payload contains inlineData (Base64 PDF or Image), we MUST use the standard Flash Vision model. 
+  // If it is just text, we use the ultra-fast Flash-Lite text model.
+  const requiresPureOCR = finalParts.some(part => part.inlineData !== undefined);
+  const modelName = requiresPureOCR ? "gemini-3.1-flash-preview" : "gemini-3.1-flash-lite-preview";
 
   try {
-    let finalParts: any[] = [];
-    
-    if (typeof content === 'object' && 'parts' in content) {
-      finalParts = content.parts;
-    } else if (typeof content === 'string') {
-      finalParts.push({ text: content.substring(0, 30000) });
-    } else {
-      finalParts.push({ inlineData: { data: content.data, mimeType: content.mimeType } });
-    }
+    const linkInstruction = linkCode 
+      ? `A shared link code [${linkCode}] MUST be inserted immediately after the protocol category code in the 'newName' for EVERY file. Example: [ZA][${linkCode}] or [KA][${linkCode}].`
+      : `Process files independently. NO shared link code required.`;
 
-// Determine instructions based on whether it's a linked bundle or a high-speed independent batch
-    const linkInstruction = linkCode 
-      ? `A shared link code [${linkCode}] MUST be inserted immediately after the protocol category code in the 'newName' for EVERY file. Example: [ZA][${linkCode}] or [KA][${linkCode}].`
-      : `Process files independently. NO shared link code required.`;
+    let instructions = isBundle ? `THESE ARE MULTIPLE FILES IN A BATCH.
+         ${linkInstruction}
+         DATE EXTRACTION PRIORITY: 1. Extract the specific date from the content. 2. Fallback: ${fallbackDate}.
+         Return an object with 'bundleResults', ONE FOR EACH unique file provided in the input parts.
+         CRITICAL REQUIREMENTS: 1. 'newName' and 'summary' MUST be distinct. 2. Attachments MUST NOT just copy the email name.` 
+         : `Apply protocol v4.8 strictly. DATE EXTRACTION PRIORITY: 1. Internal content 2. Fallback: ${fallbackDate}. Ensure ddmmyyyy is at the end. Return JSON only.`;
 
-    let instructions = "";
-    
-    if (isBundle) {
-        instructions = `THESE ARE MULTIPLE FILES IN A BATCH.
-         ${linkInstruction}
-         
-         DATE EXTRACTION PRIORITY:
-         1. Extract the specific date from the content of the document itself (in ddmmyyyy format).
-         2. If linked as a bundle and document is an attachment with no internal date, use the date of the primary email.
-         3. Fallback: ${fallbackDate}.
-         
-         Return an object with 'bundleResults', ONE FOR EACH unique file provided in the input parts.
-         
-         CRITICAL REQUIREMENTS:
-         1. 'newName' and 'summary' MUST be distinct and highly specific to the individual file.
-         2. Attachments MUST NOT just copy the email name; use their OWN content category.
-         3. For emails in a linked bundle, 'newName' MUST include "incl att".`;
-    } else {
-        instructions = `Apply protocol v4.8 strictly. 
-         DATE EXTRACTION PRIORITY: 1. Internal content 2. Fallback: ${fallbackDate}.
-         Ensure ddmmyyyy is at the end. Return JSON only.`;
-    }
-
-    const mainPromptPart = { 
-      text: `TASK: ${isBundle ? 'BATCH PROCESSING' : 'INDIVIDUAL PROCESSING'}
-${instructions}
-Return JSON strictly matching the schema.`
-    };
-    
-    finalParts.unshift(mainPromptPart);
+    finalParts.unshift({ text: `TASK: ${isBundle ? 'BATCH PROCESSING' : 'INDIVIDUAL PROCESSING'}\n${instructions}\nReturn JSON strictly matching the schema.` });
 
     const schemaProperties: any = {
       newName: { type: Type.STRING },
@@ -84,12 +58,7 @@ Return JSON strictly matching the schema.`
         type: Type.ARRAY,
         items: {
           type: Type.OBJECT,
-          properties: {
-            text: { type: Type.STRING },
-            isAsset: { type: Type.BOOLEAN },
-            isCreditor: { type: Type.BOOLEAN },
-            isHighRisk: { type: Type.BOOLEAN }
-          },
+          properties: { text: { type: Type.STRING }, isAsset: { type: Type.BOOLEAN }, isCreditor: { type: Type.BOOLEAN }, isHighRisk: { type: Type.BOOLEAN } },
           required: ["text", "isAsset", "isCreditor", "isHighRisk"]
         }
       },
@@ -97,11 +66,7 @@ Return JSON strictly matching the schema.`
         type: Type.ARRAY,
         items: {
           type: Type.OBJECT,
-          properties: {
-            type: { type: Type.STRING },
-            value: { type: Type.STRING },
-            context: { type: Type.STRING }
-          },
+          properties: { type: { type: Type.STRING }, value: { type: Type.STRING }, context: { type: Type.STRING } },
           required: ["type", "value", "context"]
         }
       }
@@ -116,25 +81,9 @@ Return JSON strictly matching the schema.`
         responseMimeType: "application/json",
         responseSchema: isBundle ? {
           type: Type.OBJECT,
-          properties: {
-            bundleResults: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  originalName: { type: Type.STRING },
-                  ...schemaProperties
-                },
-                required: ["originalName", "newName", "summary", "managedPoints", "referenceNumbers"]
-              }
-            }
-          },
+          properties: { bundleResults: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { originalName: { type: Type.STRING }, ...schemaProperties }, required: ["originalName", "newName", "summary", "managedPoints", "referenceNumbers"] } } },
           required: ["bundleResults"]
-        } : {
-          type: Type.OBJECT,
-          properties: schemaProperties,
-          required: ["newName", "summary", "managedPoints", "referenceNumbers"]
-        }
+        } : { type: Type.OBJECT, properties: schemaProperties, required: ["newName", "summary", "managedPoints", "referenceNumbers"] }
       }
     });
 
@@ -145,18 +94,14 @@ Return JSON strictly matching the schema.`
         bundleResults: result.bundleResults.map((res: any) => {
           const fileExt = res.originalName?.split('.').pop() || 'docx';
           let cleanName = (res.newName || res.originalName || "Unnamed").trim().replace(/[:\\/*?"<>|]/g, '');
-          if (!cleanName.toLowerCase().endsWith(`.${fileExt.toLowerCase()}`)) {
-            cleanName = `${cleanName}.${fileExt}`;
-          }
+          if (!cleanName.toLowerCase().endsWith(`.${fileExt.toLowerCase()}`)) cleanName = `${cleanName}.${fileExt}`;
           return { ...res, newName: cleanName };
         })
       };
     }
 
     let cleanName = (result.newName || originalFilename).trim().replace(/[:\\/*?"<>|]/g, '');
-    if (!cleanName.toLowerCase().endsWith(`.${ext.toLowerCase()}`)) {
-      cleanName = `${cleanName}.${ext}`;
-    }
+    if (!cleanName.toLowerCase().endsWith(`.${ext.toLowerCase()}`)) cleanName = `${cleanName}.${ext}`;
 
     return {
       originalName: originalFilename,
